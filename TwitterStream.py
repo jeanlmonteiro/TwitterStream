@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 2012 Gustav Arngården
@@ -15,35 +14,25 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-    
+
 import time
 import pycurl
 import urllib
 import json
 import oauth2 as oauth
 
-API_ENDPOINT_URL = 'https://stream.twitter.com/1.1/statuses/filter.json'
-USER_AGENT = 'TwitterStream 1.0' # This can be anything really
-
-# You need to replace these with your own values
-OAUTH_KEYS = {'consumer_key': <Consumer key>,
-              'consumer_secret': <Consumer secret>,
-              'access_token_key': <Token key>,
-              'access_token_secret': <Token secret>}
-
-# These values are posted when setting up the connection
-POST_PARAMS = {'include_entities': 0,
-               'stall_warning': 'true',
-               'track': 'iphone,ipad,ipod'}
-
 class TwitterStream:
-    def __init__(self, timeout=False):
-        self.oauth_token = oauth.Token(key=OAUTH_KEYS['access_token_key'], secret=OAUTH_KEYS['access_token_secret'])
-        self.oauth_consumer = oauth.Consumer(key=OAUTH_KEYS['consumer_key'], secret=OAUTH_KEYS['consumer_secret'])
+    API_ENDPOINT_URL = 'https://stream.twitter.com/1.1/statuses/filter.json'
+
+    def __init__(self, callback, oauth_keys, post_params, timeout=False, user_agent=None):
+        self.callback = callback
+        self.oauth_token = oauth.Token(key=oauth_keys['access_token_key'], secret=oauth_keys['access_token_secret'])
+        self.oauth_consumer = oauth.Consumer(key=oauth_keys['consumer_key'], secret=oauth_keys['consumer_secret'])
         self.conn = None
         self.buffer = ''
+        self.post_params = urllib.urlencode(post_params)
         self.timeout = timeout
-        self.setup_connection()
+        self.user_agent = user_agent
 
     def setup_connection(self):
         """ Create persistant HTTP connection to Streaming API endpoint using cURL.
@@ -56,25 +45,26 @@ class TwitterStream:
         if isinstance(self.timeout, int):
             self.conn.setopt(pycurl.LOW_SPEED_LIMIT, 1)
             self.conn.setopt(pycurl.LOW_SPEED_TIME, self.timeout)
-        self.conn.setopt(pycurl.URL, API_ENDPOINT_URL)
-        self.conn.setopt(pycurl.USERAGENT, USER_AGENT)
+        self.conn.setopt(pycurl.URL, self.API_ENDPOINT_URL)
+        if self.user_agent:
+          self.conn.setopt(pycurl.USERAGENT, self.user_agent)
         # Using gzip is optional but saves us bandwidth.
         self.conn.setopt(pycurl.ENCODING, 'deflate, gzip')
         self.conn.setopt(pycurl.POST, 1)
-        self.conn.setopt(pycurl.POSTFIELDS, urllib.urlencode(POST_PARAMS))
+        self.conn.setopt(pycurl.POSTFIELDS, self.post_params)
         self.conn.setopt(pycurl.HTTPHEADER, ['Host: stream.twitter.com',
-                                             'Authorization: %s' % self.get_oauth_header()])
+                                             'Authorization: %s' % self._get_oauth_header()])
         # self.handle_tweet is the method that are called when new tweets arrive
         self.conn.setopt(pycurl.WRITEFUNCTION, self.handle_tweet)
 
-    def get_oauth_header(self):
+    def _get_oauth_header(self):
         """ Create and return OAuth header.
         """
         params = {'oauth_version': '1.0',
                   'oauth_nonce': oauth.generate_nonce(),
                   'oauth_timestamp': int(time.time())}
-        req = oauth.Request(method='POST', parameters=params, url='%s?%s' % (API_ENDPOINT_URL,
-                                                                             urllib.urlencode(POST_PARAMS)))
+        req = oauth.Request(method='POST', parameters=params, url='%s?%s' % (self.API_ENDPOINT_URL,
+                                                                             self.post_params))
         req.sign_request(oauth.SignatureMethod_HMAC_SHA1(), self.oauth_consumer, self.oauth_token)
         return req.to_header()['Authorization'].encode('utf-8')
 
@@ -118,18 +108,5 @@ class TwitterStream:
             # complete message received
             message = json.loads(self.buffer)
             self.buffer = ''
-            msg = ''
-            if message.get('limit'):
-                print 'Rate limiting caused us to miss %s tweets' % (message['limit'].get('track'))
-            elif message.get('disconnect'):
-                raise Exception('Got disconnect: %s' % message['disconnect'].get('reason'))
-            elif message.get('warning'):
-                print 'Got warning: %s' % message['warning'].get('message')
-            else:
-                print 'Got tweet with text: %s' % message.get('text')
+            self.callback(message)
 
-
-if __name__ == '__main__':
-    ts = TwitterStream()
-    ts.setup_connection()
-    ts.start()
